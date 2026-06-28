@@ -1,0 +1,8 @@
+# Raspberry Pi GUI dependencies
+# Install with:  pip install -r requirements.txt
+#
+# tkinter is part of the Python standard library and is NOT listed here.
+# On Raspberry Pi OS it can be installed with:
+#   sudo apt install python3-tk
+
+pyserial>=3.5
