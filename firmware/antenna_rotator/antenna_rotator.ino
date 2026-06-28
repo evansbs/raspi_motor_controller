@@ -3,8 +3,8 @@
  *
  * Hardware:
  *   - Arduino Nano (ATmega328P)
- *   - MPU6050 IMU on I2C (address 0x68) — accelerometer/gyro for pitch & roll
- *   - QMC5883L magnetometer on I2C (address 0x0D) — compass heading / azimuth
+ *   - MPU6050 IMU on I2C (address 0x68 or 0x69) — accelerometer/gyro
+ *   - HMC5883L/QMC5883L-compatible magnetometer on I2C (0x1E / 0x0D)
  *     (jumper USE_MAGNETOMETER to 0 if no mag chip is fitted; AZ falls back to
  *      dead-reckoning based on known motor speed)
  *   - L298N dual H-bridge motor driver:
@@ -52,10 +52,13 @@
 // #define EL_ENB  9
 
 // ============================================================
-// I2C addresses
+// I2C addresses (auto-detected in setup)
 // ============================================================
-#define MPU6050_ADDR  0x68
-#define QMC5883L_ADDR 0x0D
+#define MPU6050_ADDR_PRIMARY   0x69
+#define MPU6050_ADDR_FALLBACK  0x68
+#define MAG_ADDR_HMC5883L      0x1E
+#define MAG_ADDR_QMC5883L      0x0D
+#define LIS3DH_ADDR            0x19
 
 // ============================================================
 // Tunable parameters
@@ -102,13 +105,34 @@ uint8_t cmdLen = 0;
 // MPU6050 hardware availability
 bool mpuOk = false;
 bool magOk = false;
+bool lis3dhDetected = false;
+uint8_t activeMpuAddr = MPU6050_ADDR_PRIMARY;
+
+enum MagType {
+    MAG_NONE = 0,
+    MAG_HMC5883L,
+    MAG_QMC5883L
+};
+
+MagType magType = MAG_NONE;
+uint8_t activeMagAddr = 0;
+
+static bool i2c_device_present(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+}
+
+static void printHexByte(uint8_t value) {
+    if (value < 16) Serial.print('0');
+    Serial.print(value, HEX);
+}
 
 // ============================================================
 // MPU-6050 helpers
 // ============================================================
 
 static bool mpu6050_write(uint8_t reg, uint8_t val) {
-    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.beginTransmission(activeMpuAddr);
     Wire.write(reg);
     Wire.write(val);
     return Wire.endTransmission() == 0;
@@ -121,15 +145,22 @@ bool mpu6050_init() {
     mpu6050_write(0x1C, 0x00);
     // DLPF ~44 Hz
     mpu6050_write(0x1A, 0x03);
+    // Probe WHO_AM_I when available (0x68 or 0x69 expected)
+    Wire.beginTransmission(activeMpuAddr);
+    Wire.write(0x75);
+    if (Wire.endTransmission(false) == 0 && Wire.requestFrom((uint8_t)activeMpuAddr, (uint8_t)1, (uint8_t)true) == 1) {
+        uint8_t whoAmI = Wire.read();
+        if (whoAmI != 0x68 && whoAmI != 0x69) return false;
+    }
     return true;
 }
 
 // Returns true and fills ax/ay/az in units of g.
 bool mpu6050_read_accel(float &ax, float &ay, float &azv) {
-    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.beginTransmission(activeMpuAddr);
     Wire.write(0x3B);   // ACCEL_XOUT_H
     if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom((uint8_t)MPU6050_ADDR, (uint8_t)6, (uint8_t)true) < 6) return false;
+    if (Wire.requestFrom((uint8_t)activeMpuAddr, (uint8_t)6, (uint8_t)true) < 6) return false;
 
     int16_t raw_ax = ((int16_t)Wire.read() << 8) | Wire.read();
     int16_t raw_ay = ((int16_t)Wire.read() << 8) | Wire.read();
@@ -148,7 +179,7 @@ bool mpu6050_read_accel(float &ax, float &ay, float &azv) {
 #if USE_MAGNETOMETER
 
 static bool qmc_write(uint8_t reg, uint8_t val) {
-    Wire.beginTransmission(QMC5883L_ADDR);
+    Wire.beginTransmission(activeMagAddr);
     Wire.write(reg);
     Wire.write(val);
     return Wire.endTransmission() == 0;
@@ -170,18 +201,18 @@ bool qmc5883l_init() {
 // Returns true and fills mx/my/mz in raw LSB counts.
 bool qmc5883l_read(int16_t &mx, int16_t &my, int16_t &mz) {
     // Check data-ready bit in status register (0x06)
-    Wire.beginTransmission(QMC5883L_ADDR);
+    Wire.beginTransmission(activeMagAddr);
     Wire.write(0x06);
     if (Wire.endTransmission(false) != 0) return false;
-    Wire.requestFrom((uint8_t)QMC5883L_ADDR, (uint8_t)1, (uint8_t)true);
+    Wire.requestFrom((uint8_t)activeMagAddr, (uint8_t)1, (uint8_t)true);
     if (!Wire.available()) return false;
     uint8_t status = Wire.read();
     if (!(status & 0x01)) return false;   // DRDY not set
 
-    Wire.beginTransmission(QMC5883L_ADDR);
+    Wire.beginTransmission(activeMagAddr);
     Wire.write(0x00);   // Data starts at register 0
     if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom((uint8_t)QMC5883L_ADDR, (uint8_t)6, (uint8_t)true) < 6) return false;
+    if (Wire.requestFrom((uint8_t)activeMagAddr, (uint8_t)6, (uint8_t)true) < 6) return false;
 
     // QMC5883L is little-endian
     mx = (int16_t)(Wire.read() | ((uint16_t)Wire.read() << 8));
@@ -191,6 +222,41 @@ bool qmc5883l_read(int16_t &mx, int16_t &my, int16_t &mz) {
 }
 
 #endif  // USE_MAGNETOMETER
+
+#if USE_MAGNETOMETER
+static bool hmc_write8(uint8_t reg, uint8_t val) {
+    Wire.beginTransmission(activeMagAddr);
+    Wire.write(reg);
+    Wire.write(val);
+    return Wire.endTransmission() == 0;
+}
+
+bool hmc5883l_init() {
+    // CRA: 8-average, 15Hz, normal measurement
+    if (!hmc_write8(0x00, 0x70)) return false;
+    // CRB: gain setting
+    if (!hmc_write8(0x01, 0x20)) return false;
+    // Mode: continuous measurement
+    if (!hmc_write8(0x02, 0x00)) return false;
+    return true;
+}
+
+bool hmc5883l_read(int16_t &mx, int16_t &my, int16_t &mz) {
+    Wire.beginTransmission(activeMagAddr);
+    Wire.write(0x03);  // Data output X MSB
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((uint8_t)activeMagAddr, (uint8_t)6, (uint8_t)true) < 6) return false;
+
+    // HMC5883L register order: X, Z, Y (big-endian)
+    int16_t x = ((int16_t)Wire.read() << 8) | Wire.read();
+    int16_t z = ((int16_t)Wire.read() << 8) | Wire.read();
+    int16_t y = ((int16_t)Wire.read() << 8) | Wire.read();
+    mx = x;
+    my = y;
+    mz = z;
+    return true;
+}
+#endif
 
 // ============================================================
 // IMU fusion: compute heading, pitch, roll
@@ -210,7 +276,10 @@ void updateIMU() {
 #if USE_MAGNETOMETER
     if (magOk) {
         int16_t mx16, my16, mz16;
-        if (qmc5883l_read(mx16, my16, mz16)) {
+        bool magReadOk = false;
+        if (magType == MAG_HMC5883L) magReadOk = hmc5883l_read(mx16, my16, mz16);
+        if (magType == MAG_QMC5883L) magReadOk = qmc5883l_read(mx16, my16, mz16);
+        if (magReadOk) {
             float mx = (float)mx16;
             float my = (float)my16;
             float mz = (float)mz16;
@@ -508,10 +577,27 @@ void setup() {
 
     // Initialise IMU chips
     delay(100);
-    mpuOk = mpu6050_init();
+    if (i2c_device_present(MPU6050_ADDR_PRIMARY)) {
+        activeMpuAddr = MPU6050_ADDR_PRIMARY;
+        mpuOk = mpu6050_init();
+    }
+    if (!mpuOk && i2c_device_present(MPU6050_ADDR_FALLBACK)) {
+        activeMpuAddr = MPU6050_ADDR_FALLBACK;
+        mpuOk = mpu6050_init();
+    }
+    lis3dhDetected = i2c_device_present(LIS3DH_ADDR);
 
 #if USE_MAGNETOMETER
-    magOk = qmc5883l_init();
+    if (i2c_device_present(MAG_ADDR_HMC5883L)) {
+        activeMagAddr = MAG_ADDR_HMC5883L;
+        magType = MAG_HMC5883L;
+        magOk = hmc5883l_init();
+    }
+    if (!magOk && i2c_device_present(MAG_ADDR_QMC5883L)) {
+        activeMagAddr = MAG_ADDR_QMC5883L;
+        magType = MAG_QMC5883L;
+        magOk = qmc5883l_init();
+    }
 #else
     magOk = false;
 #endif
@@ -519,8 +605,25 @@ void setup() {
     // Report init status
     Serial.print(F("INIT MPU6050="));
     Serial.print(mpuOk ? F("OK") : F("FAIL"));
-    Serial.print(F(" QMC5883L="));
-    Serial.println(magOk ? F("OK") : (USE_MAGNETOMETER ? F("FAIL") : F("DISABLED")));
+    Serial.print(F(" MAG="));
+    if (!USE_MAGNETOMETER) {
+        Serial.print(F("DISABLED"));
+    } else if (!magOk) {
+        Serial.print(F("FAIL"));
+    } else if (magType == MAG_HMC5883L) {
+        Serial.print(F("HMC5883L"));
+    } else if (magType == MAG_QMC5883L) {
+        Serial.print(F("QMC5883L"));
+    } else {
+        Serial.print(F("UNKNOWN"));
+    }
+    Serial.print(F(" MPU_ADDR=0x"));
+    printHexByte(activeMpuAddr);
+    Serial.print(F(" MAG_ADDR=0x"));
+    if (activeMagAddr) printHexByte(activeMagAddr);
+    else Serial.print(F("00"));
+    Serial.print(F(" LIS3DH@0x19="));
+    Serial.println(lis3dhDetected ? F("DETECTED") : F("NO"));
 
     lastStatusMs = millis();
     lastImuMs    = millis();

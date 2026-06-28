@@ -2,7 +2,7 @@
 
 End-to-end AZ/EL antenna rotator system:  
 **Raspberry Pi 3** desktop GUI ↔ **Arduino Nano** firmware  
-using an L298N motor driver and MPU6050 + QMC5883L IMU.
+using an L298N motor driver and MPU6050 + HMC/QMC-compatible magnetometer.
 
 ---
 
@@ -26,8 +26,9 @@ README.md
 |-----------|-------|
 | Raspberry Pi 3 (or any Pi) | Runs the Python GUI |
 | Arduino Nano (ATmega328P) | Motor control + IMU bridge |
-| MPU6050 | Accelerometer/gyro over I2C (address 0x68) — pitch & roll |
-| QMC5883L | Magnetometer over I2C (address 0x0D) — compass heading |
+| MPU6050 | Accelerometer/gyro over I2C (address **0x69** primary, 0x68 fallback) — pitch & roll |
+| HMC5883L-compatible magnetometer | Magnetometer over I2C (address **0x1E** primary, 0x0D fallback) — compass heading |
+| LIS3DH (optional/present on some boards) | Detected at I2C 0x19 for diagnostics |
 | L298N motor driver | Dual H-bridge for AZ and EL motors |
 | AZ motor | ~0.6 rpm, connected to L298N Motor-A outputs |
 | EL motor | ~0.6 rpm, connected to L298N Motor-B outputs |
@@ -73,7 +74,7 @@ IMU modules use the Arduino's I2C bus (A4 = SDA, A5 = SCL, 3.3 V or 5 V power).
 | `POS AZ=<f> EL=<f> HDG=<f> PITCH=<f> ROLL=<f> MOVING=<0\|1>` | Status broadcast (every 500 ms + on demand) |
 | `OK <echo>` | Command acknowledged |
 | `ERR <message>` | Command rejected |
-| `INIT MPU6050=<OK\|FAIL> QMC5883L=<OK\|FAIL\|DISABLED>` | Startup report |
+| `INIT MPU6050=<OK\|FAIL> MAG=<...> MPU_ADDR=0x.. MAG_ADDR=0x.. LIS3DH@0x19=<...>` | Startup report |
 
 ---
 
@@ -100,7 +101,7 @@ both ICs directly over I2C.
 ### Compile-time options (top of sketch)
 
 ```cpp
-#define USE_MAGNETOMETER 1   // Set to 0 if no QMC5883L is fitted
+#define USE_MAGNETOMETER 1   // Set to 0 if no magnetometer is fitted
 #define MOTOR_DEADBAND   2.0 // Degrees — stop motors within this error
 #define AZ_DEG_PER_SEC   3.6 // Dead-reckoning speed (0.6 rpm × 6)
 #define MAG_DECLINATION  0.0 // Or use the DECL command at runtime
@@ -172,7 +173,7 @@ to GS-232B `AZ\nEL\n` replies.
 | Symptom | Likely cause |
 |---------|-------------|
 | `INIT MPU6050=FAIL` | Wiring error on SDA/SCL or wrong I2C address |
-| `INIT QMC5883L=FAIL` | Try address 0x0C (some clones) or check pull-ups |
+| `INIT ... MAG=FAIL` | Check 0x1E/0x0D wiring and I2C pull-ups |
 | AZ reads 0.0 always | `USE_MAGNETOMETER=0` or DRDY never set |
 | Motor runs continuously | Deadband too small, or IMU reading wrong axis |
 | GUI shows "---°" | No POS line received yet — check baud rate |
