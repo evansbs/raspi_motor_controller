@@ -172,7 +172,7 @@ to GS-232B `AZ\nEL\n` replies.
 
 | Symptom | Likely cause |
 |---------|-------------|
-| `INIT MPU6050=FAIL` | Wiring error on SDA/SCL or wrong I2C address |
+| `INIT MPU6050=FAIL` | Wiring error on SDA/SCL, wrong I2C address, or an incompatible IMU reporting an unexpected WHO_AM_I value |
 | `INIT ... MAG=FAIL` | Check 0x1E/0x0D wiring and I2C pull-ups |
 | AZ reads 0.0 always | `USE_MAGNETOMETER=0` or DRDY never set |
 | Motor runs continuously | Deadband too small, or IMU reading wrong axis |

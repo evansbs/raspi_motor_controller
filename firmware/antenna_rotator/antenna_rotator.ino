@@ -127,6 +127,21 @@ static void printHexByte(uint8_t value) {
     Serial.print(value, HEX);
 }
 
+static bool mpu_who_am_i_compatible(uint8_t whoAmI) {
+    switch (whoAmI) {
+        case 0x68: // MPU-6050 / MPU-6000 family
+        case 0x69:
+        case 0x70: // compatible InvenSense-family clones / variants
+        case 0x71:
+        case 0x72:
+        case 0x73:
+        case 0x75:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // ============================================================
 // MPU-6050 helpers
 // ============================================================
@@ -145,12 +160,13 @@ bool mpu6050_init() {
     mpu6050_write(0x1C, 0x00);
     // DLPF ~44 Hz
     mpu6050_write(0x1A, 0x03);
-    // Probe WHO_AM_I when available (0x68 or 0x69 expected)
+    // Probe WHO_AM_I when available; some compatible parts/clones identify
+    // with nearby InvenSense-family values while keeping the same accel regs.
     Wire.beginTransmission(activeMpuAddr);
     Wire.write(0x75);
     if (Wire.endTransmission(false) == 0 && Wire.requestFrom((uint8_t)activeMpuAddr, (uint8_t)1, (uint8_t)true) == 1) {
         uint8_t whoAmI = Wire.read();
-        if (whoAmI != 0x68 && whoAmI != 0x69) return false;
+        if (!mpu_who_am_i_compatible(whoAmI)) return false;
     }
     return true;
 }
@@ -262,16 +278,21 @@ bool hmc5883l_read(int16_t &mx, int16_t &my, int16_t &mz) {
 // IMU fusion: compute heading, pitch, roll
 // ============================================================
 void updateIMU() {
-    float ax, ay, azv;
-    if (!mpu6050_read_accel(ax, ay, azv)) return;
+    float pitch_rad = currentPitch * ((float)M_PI / 180.0f);
+    float roll_rad  = currentRoll  * ((float)M_PI / 180.0f);
 
-    // Pitch and roll from accelerometer (static tilt, no gyro integration)
-    float pitch_rad = atan2f(-ax, sqrtf(ay * ay + azv * azv));
-    float roll_rad  = atan2f(ay,  azv);
+    if (mpuOk) {
+        float ax, ay, azv;
+        if (!mpu6050_read_accel(ax, ay, azv)) return;
 
-    currentPitch = pitch_rad * (180.0f / (float)M_PI);
-    currentRoll  = roll_rad  * (180.0f / (float)M_PI);
-    currentEl    = currentPitch;    // Elevation ≈ pitch angle
+        // Pitch and roll from accelerometer (static tilt, no gyro integration)
+        pitch_rad = atan2f(-ax, sqrtf(ay * ay + azv * azv));
+        roll_rad  = atan2f(ay,  azv);
+
+        currentPitch = pitch_rad * (180.0f / (float)M_PI);
+        currentRoll  = roll_rad  * (180.0f / (float)M_PI);
+        currentEl    = currentPitch;    // Elevation ≈ pitch angle
+    }
 
 #if USE_MAGNETOMETER
     if (magOk) {
