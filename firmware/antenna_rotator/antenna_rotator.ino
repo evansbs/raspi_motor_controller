@@ -42,10 +42,10 @@
 // ============================================================
 // Pin Assignments  (change to match your wiring)
 // ============================================================
-#define AZ_IN1  4   // L298N IN1  (Motor A, Azimuth)
-#define AZ_IN2  5   // L298N IN2
-#define EL_IN1  6   // L298N IN3  (Motor B, Elevation)
-#define EL_IN2  7   // L298N IN4
+#define AZ_IN1  9   // L298N IN1  → OUT3  AZ+
+#define AZ_IN2  10  // L298N IN2  → OUT4  AZ-
+#define EL_IN1  5   // L298N IN3  → OUT1  EL+
+#define EL_IN2  6   // L298N IN4  → OUT2  EL-
 // If your L298N board has separate ENA/ENB header pins (not jumpered),
 // uncomment the two lines below and wire PWM pins to them.
 // #define AZ_ENA  3

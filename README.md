@@ -34,14 +34,14 @@ README.md
 
 ### Arduino wiring
 
-| Arduino pin | L298N pin | Function |
-|-------------|-----------|----------|
-| D4 | IN1 | AZ motor direction A |
-| D5 | IN2 | AZ motor direction B |
-| D6 | IN3 | EL motor direction A |
-| D7 | IN4 | EL motor direction B |
-| 5 V | VCC | Logic power |
-| GND | GND | Common ground |
+| Arduino pin | L298N pin | L298N output | Function |
+|-------------|-----------|--------------|----------|
+| D9  | IN1 | OUT3 | AZ+ (CW)  |
+| D10 | IN2 | OUT4 | AZ− (CCW) |
+| D5  | IN3 | OUT1 | EL+ (up)  |
+| D6  | IN4 | OUT2 | EL− (down)|
+| 5 V | VCC | —    | Logic power |
+| GND | GND | —    | Common ground |
 
 > If your L298N module has separate ENA/ENB header pins (not jumpered),
 > uncomment `#define AZ_ENA 3` and `#define EL_ENB 9` in the sketch and
