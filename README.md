@@ -28,7 +28,7 @@ README.md
 | Arduino Nano (ATmega328P) | Motor control + IMU bridge |
 | MPU6050 | Accelerometer/gyro over I2C (address **0x69** primary, 0x68 fallback) — pitch & roll |
 | HMC5883L-compatible magnetometer | Magnetometer over I2C (address **0x1E** primary, 0x0D fallback) — compass heading |
-| LIS3DH (optional/present on some boards) | Detected at I2C 0x19 for diagnostics |
+| LIS3DH (optional/present on some boards) | Detected at I2C 0x19 and used as an accel fallback for pitch/roll/elevation |
 | L298N motor driver | Dual H-bridge for AZ and EL motors |
 | AZ motor | ~0.6 rpm, connected to L298N Motor-A outputs |
 | EL motor | ~0.6 rpm, connected to L298N Motor-B outputs |
@@ -172,7 +172,7 @@ to GS-232B `AZ\nEL\n` replies.
 
 | Symptom | Likely cause |
 |---------|-------------|
-| `INIT MPU6050=FAIL` | Wiring error on SDA/SCL, wrong I2C address, or an incompatible IMU reporting an unexpected WHO_AM_I value |
+| `INIT MPU6050=FAIL` | Wiring error on SDA/SCL, wrong I2C address, or an incompatible IMU; if `LIS3DH@0x19=DETECTED`, pitch/roll/elevation may still work via fallback |
 | `INIT ... MAG=FAIL` | Check 0x1E/0x0D wiring and I2C pull-ups |
 | AZ reads 0.0 always | `USE_MAGNETOMETER=0` or DRDY never set |
 | Motor runs continuously | Deadband too small, or IMU reading wrong axis |

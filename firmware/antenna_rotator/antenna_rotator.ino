@@ -106,6 +106,7 @@ uint8_t cmdLen = 0;
 bool mpuOk = false;
 bool magOk = false;
 bool lis3dhDetected = false;
+bool lis3dhOk = false;
 uint8_t activeMpuAddr = MPU6050_ADDR_PRIMARY;
 
 enum MagType {
@@ -166,7 +167,10 @@ bool mpu6050_init() {
     Wire.write(0x75);
     if (Wire.endTransmission(false) == 0 && Wire.requestFrom((uint8_t)activeMpuAddr, (uint8_t)1, (uint8_t)true) == 1) {
         uint8_t whoAmI = Wire.read();
-        if (!mpu_who_am_i_compatible(whoAmI)) return false;
+        if (!mpu_who_am_i_compatible(whoAmI)) {
+            // Some boards expose MPU-compatible accel registers but report a
+            // different ID here; tolerate that and let live accel reads decide.
+        }
     }
     return true;
 }
@@ -183,6 +187,49 @@ bool mpu6050_read_accel(float &ax, float &ay, float &azv) {
     int16_t raw_az = ((int16_t)Wire.read() << 8) | Wire.read();
 
     const float scale = 1.0f / 16384.0f;   // ±2 g
+    ax  = raw_ax * scale;
+    ay  = raw_ay * scale;
+    azv = raw_az * scale;
+    return true;
+}
+
+static bool lis3dh_write(uint8_t reg, uint8_t val) {
+    Wire.beginTransmission(LIS3DH_ADDR);
+    Wire.write(reg);
+    Wire.write(val);
+    return Wire.endTransmission() == 0;
+}
+
+bool lis3dh_init() {
+    Wire.beginTransmission(LIS3DH_ADDR);
+    Wire.write(0x0F);   // WHO_AM_I
+    if (Wire.endTransmission(false) == 0 && Wire.requestFrom((uint8_t)LIS3DH_ADDR, (uint8_t)1, (uint8_t)true) == 1) {
+        uint8_t whoAmI = Wire.read();
+        if (whoAmI != 0x33) return false;
+    }
+
+    // 100 Hz, normal mode, XYZ enabled
+    if (!lis3dh_write(0x20, 0x57)) return false;
+    // BDU enabled, high-resolution, ±2 g
+    if (!lis3dh_write(0x23, 0x88)) return false;
+    return true;
+}
+
+bool lis3dh_read_accel(float &ax, float &ay, float &azv) {
+    Wire.beginTransmission(LIS3DH_ADDR);
+    Wire.write(0x28 | 0x80);   // OUT_X_L with auto-increment
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((uint8_t)LIS3DH_ADDR, (uint8_t)6, (uint8_t)true) < 6) return false;
+
+    int16_t raw_ax = (int16_t)(Wire.read() | ((uint16_t)Wire.read() << 8));
+    int16_t raw_ay = (int16_t)(Wire.read() | ((uint16_t)Wire.read() << 8));
+    int16_t raw_az = (int16_t)(Wire.read() | ((uint16_t)Wire.read() << 8));
+
+    raw_ax >>= 4;
+    raw_ay >>= 4;
+    raw_az >>= 4;
+
+    const float scale = 1.0f / 1000.0f;   // ±2 g high-resolution ≈ 1 mg/LSB
     ax  = raw_ax * scale;
     ay  = raw_ay * scale;
     azv = raw_az * scale;
@@ -277,21 +324,24 @@ bool hmc5883l_read(int16_t &mx, int16_t &my, int16_t &mz) {
 // ============================================================
 // IMU fusion: compute heading, pitch, roll
 // ============================================================
+static void updateTiltFromAccel(float ax, float ay, float azv, float &pitch_rad, float &roll_rad) {
+    pitch_rad = atan2f(-ax, sqrtf(ay * ay + azv * azv));
+    roll_rad  = atan2f(ay,  azv);
+
+    currentPitch = pitch_rad * (180.0f / (float)M_PI);
+    currentRoll  = roll_rad  * (180.0f / (float)M_PI);
+    currentEl    = currentPitch;    // Elevation ≈ pitch angle
+}
+
 void updateIMU() {
     float pitch_rad = currentPitch * ((float)M_PI / 180.0f);
     float roll_rad  = currentRoll  * ((float)M_PI / 180.0f);
+    float ax, ay, azv;
 
-    if (mpuOk) {
-        float ax, ay, azv;
-        if (!mpu6050_read_accel(ax, ay, azv)) return;
-
-        // Pitch and roll from accelerometer (static tilt, no gyro integration)
-        pitch_rad = atan2f(-ax, sqrtf(ay * ay + azv * azv));
-        roll_rad  = atan2f(ay,  azv);
-
-        currentPitch = pitch_rad * (180.0f / (float)M_PI);
-        currentRoll  = roll_rad  * (180.0f / (float)M_PI);
-        currentEl    = currentPitch;    // Elevation ≈ pitch angle
+    if (mpuOk && mpu6050_read_accel(ax, ay, azv)) {
+        updateTiltFromAccel(ax, ay, azv, pitch_rad, roll_rad);
+    } else if (lis3dhOk && lis3dh_read_accel(ax, ay, azv)) {
+        updateTiltFromAccel(ax, ay, azv, pitch_rad, roll_rad);
     }
 
 #if USE_MAGNETOMETER
@@ -607,6 +657,9 @@ void setup() {
         mpuOk = mpu6050_init();
     }
     lis3dhDetected = i2c_device_present(LIS3DH_ADDR);
+    if (lis3dhDetected) {
+        lis3dhOk = lis3dh_init();
+    }
 
 #if USE_MAGNETOMETER
     if (i2c_device_present(MAG_ADDR_HMC5883L)) {
